@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Simulación EcoBarrier - Río La Silla</title>
+<style>
+  :root{--bg:#eef2f5;--panel:#ffffff;--text:#16324a;--sub:#4a6478;--accent2:#2f8f4e;--warn:#e0a512;--bad:#d64545;}
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0f1b26;--panel:#17293a;--text:#e7eef5;--sub:#9db2c2;}}
+  :root[data-theme="dark"]{--bg:#0f1b26;--panel:#17293a;--text:#e7eef5;--sub:#9db2c2;}
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);}
+  .wrap{max-width:840px;margin:0 auto;padding:16px;}
+  h1{font-size:1.25rem;margin:8px 0 4px;}
+  p.sub{margin:0 0 16px;color:var(--sub);font-size:.9rem;}
+  .panel{background:var(--panel);border-radius:14px;padding:14px;box-shadow:0 2px 10px rgba(0,0,0,.08);margin-bottom:14px;}
+  canvas{width:100%;height:auto;display:block;border-radius:10px;background:#cfe8f7;}
+  .controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center;}
+  .controls label{font-size:.85rem;display:flex;flex-direction:column;gap:4px;color:var(--sub);}
+  .switch-row{display:flex;align-items:center;gap:8px;}
+  .switch{width:46px;height:26px;background:#c8ccd0;border-radius:999px;position:relative;transition:.2s;border:none;cursor:pointer;padding:0;flex:none;}
+  .switch.on{background:var(--accent2);}
+  .switch::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s;}
+  .switch.on::after{left:23px;}
+  select{padding:6px 8px;border-radius:8px;border:1px solid #ccc;font-size:.85rem;}
+  .stats{display:flex;gap:10px;flex-wrap:wrap;}
+  .stat{flex:1;min-width:110px;background:var(--bg);border-radius:10px;padding:10px;text-align:center;font-size:.8rem;color:var(--sub);}
+  .stat b{display:block;font-size:1.3rem;color:var(--text);}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.8rem;margin-top:8px;color:var(--sub);}
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block;}
+  button.empty{background:var(--accent2);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:.85rem;cursor:pointer;}
+  button.empty:disabled{opacity:.4;cursor:default;}
+  .gauge{height:10px;background:#dbe2e6;border-radius:6px;overflow:hidden;margin-top:8px;}
+  .gauge>div{height:100%;width:0%;background:var(--accent2);transition:width .2s,background .2s;}
+  .status{font-size:.8rem;color:var(--sub);margin-top:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌊 Simulación: Red EcoBarrier de ancho completo</h1>
+  <p class="sub">Río La Silla — red de filtración anclada de orilla a orilla, con anclaje de poste y tensor. Activa la auto-recolección para simular el sensor Arduino.</p>
+
+  <div class="panel">
+    <canvas id="c" width="780" height="380"></canvas>
+    <div class="legend">
+      <span><i class="dot" style="background:#3b82f6"></i>Plástico</span>
+      <span><i class="dot" style="background:#e879a3"></i>Ropa</span>
+      <span><i class="dot" style="background:#9ca3af"></i>Otros</span>
+    </div>
+  </div>
+
+  <div class="panel controls">
+    <div class="switch-row">
+      <button id="netToggle" class="switch on" aria-label="Activar red"></button>
+      <span id="netLabel">Red desplegada</span>
+    </div>
+    <div class="switch-row">
+      <button id="autoToggle" class="switch" aria-label="Auto-recolección"></button>
+      <span id="autoLabel">Auto-recolección (Arduino): apagada</span>
+    </div>
+    <label>Basura arrastrada por la corriente
+      <select id="rate">
+        <option value="slow">Baja</option>
+        <option value="mid" selected>Media</option>
+        <option value="fast">Alta (lluvia)</option>
+      </select>
+    </label>
+    <button id="emptyBtn" class="empty" disabled>Recolectar manualmente 🧺</button>
+  </div>
+
+  <div class="panel">
+    <div class="stats">
+      <div class="stat"><b id="fillStat">0%</b>Nivel de la red</div>
+      <div class="stat"><b id="totalStat">0</b>Recolectado (total)</div>
+      <div class="stat"><b id="escStat">0</b>Escapó río abajo</div>
+    </div>
+    <div class="gauge"><div id="gaugeBar"></div></div>
+    <div class="status" id="statusText">🤖 Sensor: red vacía</div>
+  </div>
+</div>
+
+<script>
+const canvas=document.getElementById('c'),ctx=canvas.getContext('2d');
+const W=canvas.width,H=canvas.height;
+const topBankH=34,bottomBankY=H-34;
+const topPile={x:170,y:34}, bottomPile={x:560,y:H-34};
+const CAPACITY=18, COLLECT_FRAMES=75;
+
+let netOn=true, autoMode=false, rate='mid';
+let trash=[], caughtItems=[], netFillCount=0, totalCollected=0, escaped=0;
+let collectState='idle', collectTimer=0;
+
+const plasticColors=['#3b82f6','#e8eef2','#22c55e','#f97316'];
+function netXatY(y){ const t=(y-topPile.y)/(bottomPile.y-topPile.y); return topPile.x+t*(bottomPile.x-topPile.x); }
+function netXY(t){ return {x:topPile.x+t*(bottomPile.x-topPile.x), y:topPile.y+t*(bottomPile.y-topPile.y)}; }
+
+function spawnTrash(){
+  const r=Math.random();
+  const category = r<0.75?'plastic':(r<0.90?'clothing':'other');
+  const color = category==='plastic'?plasticColors[Math.floor(Math.random()*plasticColors.length)]:(category==='clothing'?'#e879a3':'#9ca3af');
+  const y = topBankH+16+Math.random()*(bottomBankY-topBankH-32);
+  trash.push({x:-12,y,vx:1.1+Math.random()*0.7,vy:(Math.random()-0.5)*0.12,category,color,rot:Math.random()*6,state:'flow',passedNet:false});
+}
+let spawnTimer=0;
+function spawnInterval(){ return rate==='slow'?95:rate==='fast'?28:52; }
+
+function updateStats(){
+  const pct=Math.round(100*netFillCount/CAPACITY);
+  document.getElementById('fillStat').textContent=pct+'%';
+  document.getElementById('totalStat').textContent=totalCollected;
+  document.getElementById('escStat').textContent=escaped;
+  const bar=document.getElementById('gaugeBar');
+  bar.style.width=Math.min(100,pct)+'%';
+  bar.style.background=pct>=90?'var(--bad)':pct>=60?'var(--warn)':'var(--accent2)';
+  document.getElementById('emptyBtn').disabled = autoMode || netFillCount<CAPACITY || collectState!=='idle';
+  const st=document.getElementById('statusText');
+  if(collectState==='collecting') st.textContent='🤖 Sensor: ¡red llena! recolectando automáticamente...';
+  else if(!netOn) st.textContent='⚪ Red retraída (fuera del agua)';
+  else if(pct>=90) st.textContent = autoMode? '🤖 Sensor: red llena, iniciando recolección…' : '🟠 Sensor: red casi llena, necesita recolección manual';
+  else st.textContent = autoMode? '🤖 Sensor: monitoreando nivel de la red' : '🟢 Sensor: nivel normal';
+}
+
+function update(){
+  spawnTimer--;
+  if(spawnTimer<=0){ spawnTimer=spawnInterval(); spawnTrash(); }
+  const canCatch = netOn && collectState==='idle' && netFillCount<CAPACITY;
+  for(const t of trash){
+    t.x+=t.vx; t.y+=t.vy;
+    if(t.y<topBankH+8||t.y>bottomBankY-8) t.vy*=-1;
+    if(netOn && !t.passedNet && t.x>=netXatY(t.y)){
+      if(canCatch){
+        caughtItems.push({t:(t.y-topPile.y)/(bottomPile.y-topPile.y), jx:-(4+Math.random()*16), jy:(Math.random()-0.5)*12, color:t.color, category:t.category});
+        netFillCount++; t.dead=true; updateStats();
+      } else { t.passedNet=true; }
+    }
+    if(t.x>W+15){ if(!t.dead){ escaped++; updateStats(); } t.dead=true; }
+  }
+  trash=trash.filter(x=>!x.dead);
+
+  if(autoMode && collectState==='idle' && netFillCount>=CAPACITY){ collectState='collecting'; collectTimer=COLLECT_FRAMES; updateStats(); }
+  if(collectState==='collecting'){
+    collectTimer--;
+    if(collectTimer<=0){ totalCollected+=netFillCount; netFillCount=0; caughtItems=[]; collectState='idle'; updateStats(); }
+  }
+}
+
+let waveOffset=0;
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#dff1e0'; ctx.fillRect(0,0,W,topBankH); ctx.fillRect(0,bottomBankY,W,H-bottomBankY);
+  ctx.fillStyle='#5f9e6b';
+  for(let i=0;i<10;i++){ ctx.beginPath(); ctx.arc(30+i*80,14,9,0,7); ctx.fill(); ctx.beginPath(); ctx.arc(60+i*80,H-18,9,0,7); ctx.fill(); }
+
+  ctx.fillStyle='#4d9be6'; ctx.fillRect(0,topBankH,W,bottomBankY-topBankH);
+  waveOffset+=1.4;
+  ctx.strokeStyle='rgba(255,255,255,.3)'; ctx.lineWidth=2;
+  for(let i=0;i<5;i++){
+    ctx.beginPath();
+    for(let x=0;x<=W;x+=12){ const y=topBankH+25+i*55+Math.sin((x+waveOffset+i*40)/26)*4; x===0?ctx.moveTo(x,y):ctx.lineTo(x,y); }
+    ctx.stroke();
+  }
+  ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='bold 13px system-ui';
+  ctx.fillText('Flujo del agua →', 18, topBankH+22);
+
+  // flowing trash
+  for(const t of trash){
+    ctx.save(); ctx.translate(t.x,t.y); ctx.rotate(Math.sin(t.rot+t.x/20)*0.3);
+    ctx.fillStyle=t.color;
+    if(t.category==='plastic') ctx.fillRect(-6,-10,12,20);
+    else if(t.category==='clothing') ctx.fillRect(-9,-6,18,12);
+    else { ctx.beginPath(); ctx.arc(0,0,7,0,7); ctx.fill(); }
+    ctx.restore();
+  }
+
+  // net line
+  ctx.save();
+  ctx.strokeStyle=netOn?'#8a5a2b':'rgba(138,90,43,.35)'; ctx.lineWidth=netOn?4:2;
+  ctx.setLineDash(netOn?[]:[6,6]);
+  ctx.beginPath(); ctx.moveTo(topPile.x,topPile.y); ctx.lineTo(bottomPile.x,bottomPile.y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  if(netOn){
+    for(let i=0;i<=9;i++){ const p=netXY(i/9); ctx.fillStyle='#f4c430'; ctx.beginPath(); ctx.arc(p.x,p.y,4,0,7); ctx.fill(); }
+  }
+
+  // piles (anchors)
+  ctx.fillStyle='#7a5230'; ctx.fillRect(topPile.x-7,topPile.y-26,14,30); ctx.fillRect(bottomPile.x-7,bottomPile.y-4,14,30);
+  ctx.fillStyle='#5c3d22'; ctx.fillRect(topPile.x-9,topPile.y-28,18,6); ctx.fillRect(bottomPile.x-9,bottomPile.y-6,18,6);
+  // block and tackle icon at bottom pile
+  ctx.strokeStyle='#5c3d22'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(bottomPile.x+16,bottomPile.y-2,6,0,7); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bottomPile.x+16,bottomPile.y-2); ctx.lineTo(bottomPile.x,bottomPile.y-14); ctx.stroke();
+  ctx.fillStyle='var(--sub)'; ctx.font='10px system-ui'; ctx.fillStyle='#16324a';
+  ctx.fillText('Tensor', bottomPile.x+8, bottomPile.y+22);
+  ctx.fillText('Poste de anclaje', topPile.x-46, topPile.y-32);
+
+  // caught trash piled on net (with collection animation)
+  const progress = collectState==='collecting' ? 1-collectTimer/COLLECT_FRAMES : 0;
+  for(const it of caughtItems){
+    const base=netXY(it.t);
+    let x=base.x+it.jx, y=base.y+it.jy, alpha=1;
+    if(collectState==='collecting'){
+      x = base.x+it.jx + (bottomPile.x-(base.x+it.jx))*progress;
+      y = base.y+it.jy + (bottomPile.y-(base.y+it.jy))*progress;
+      alpha = 1-progress;
+    }
+    ctx.save(); ctx.globalAlpha=alpha; ctx.fillStyle=it.color;
+    if(it.category==='plastic'){ ctx.fillRect(x-5,y-8,10,16); }
+    else if(it.category==='clothing'){ ctx.fillRect(x-7,y-5,14,10); }
+    else { ctx.beginPath(); ctx.arc(x,y,6,0,7); ctx.fill(); }
+    ctx.restore();
+  }
+
+  // sensor LED
+  const pct=netFillCount/CAPACITY;
+  const ledColor = collectState==='collecting' ? (Math.sin(Date.now()/100)>0?'#d64545':'#f4c430') : (pct>=0.9?'#d64545':pct>=0.6?'#e0a512':'#2f8f4e');
+  ctx.fillStyle=ledColor; ctx.beginPath(); ctx.arc(topPile.x+18,topPile.y-2,7,0,7); ctx.fill();
+  ctx.strokeStyle='#333'; ctx.lineWidth=1; ctx.stroke();
+  ctx.fillStyle='#16324a'; ctx.font='10px system-ui'; ctx.fillText('Sensor', topPile.x+28,topPile.y+2);
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+document.getElementById('netToggle').addEventListener('click',e=>{
+  netOn=!netOn; e.target.classList.toggle('on',netOn);
+  document.getElementById('netLabel').textContent = netOn?'Red desplegada':'Red retraída';
+  updateStats();
+});
+document.getElementById('autoToggle').addEventListener('click',e=>{
+  autoMode=!autoMode; e.target.classList.toggle('on',autoMode);
+  document.getElementById('autoLabel').textContent = 'Auto-recolección (Arduino): '+(autoMode?'encendida':'apagada');
+  updateStats();
+});
+document.getElementById('rate').addEventListener('change',e=>rate=e.target.value);
+document.getElementById('emptyBtn').addEventListener('click',()=>{
+  if(netFillCount>=CAPACITY && collectState==='idle'){ totalCollected+=netFillCount; netFillCount=0; caughtItems=[]; updateStats(); }
+});
+
+updateStats();
+loop();
+</script>
+</body>
+</html>
